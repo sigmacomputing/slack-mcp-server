@@ -11,7 +11,7 @@
   },
   "bugs": "https://github.com/sigmacomputing/slack-mcp-server/issues",
   "publishConfig": {
-    "access": "restricted"
+    "access": "public"
   },
   "type": "module",
   "bin": {
