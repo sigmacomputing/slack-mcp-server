@@ -1,15 +1,18 @@
 {
-  "name": "@zencoderai/slack-mcp-server",
+  "name": "@sigmacomputing/slack-mcp-server",
   "version": "0.0.0-dev",
   "description": "MCP server for interacting with Slack",
   "license": "MIT",
-  "author": "Zencoder AI (https://zencoder.ai)",
-  "homepage": "https://zencoder.ai",
+  "author": "Sigma Computing",
+  "homepage": "https://github.com/sigmacomputing/slack-mcp-server",
   "repository": {
     "type": "git",
-    "url": "https://github.com/zencoderai/slack-mcp-server"
+    "url": "https://github.com/sigmacomputing/slack-mcp-server"
   },
-  "bugs": "https://github.com/zencoderai/slack-mcp-server/issues",
+  "bugs": "https://github.com/sigmacomputing/slack-mcp-server/issues",
+  "publishConfig": {
+    "access": "restricted"
+  },
   "type": "module",
   "bin": {
     "slack-mcp": "dist/index.js"
