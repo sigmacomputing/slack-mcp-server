@@ -45,6 +45,6 @@ jobs:
         npm version ${{ steps.version.outputs.version }} --no-git-tag-version
     
     - name: Publish to NPM
-      run: npm publish --provenance --access public
+      run: npm publish --provenance --access restricted
       env:
         NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
