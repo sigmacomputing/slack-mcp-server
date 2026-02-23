@@ -1,11 +1,20 @@
 # slack-mcp-server
+
+> **Fork of [zencoderai/slack-mcp-server](https://github.com/zencoderai/slack-mcp-server)** — customized for read-only access to the Sigma Slack workspace.
+
+## About This Fork
+
+This is a Sigma-specific fork of the Zencoder Slack MCP server. It is tailored for reading and searching content in the Sigma Slack workspace from Cursor IDE, with no write access (no posting messages or replying to threads). The fork adds tools for file downloads, full-text search, pins, bookmarks, and reactions that the upstream project does not provide.
+
 ## Disclaimer
-This project includes [code](https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack) originally developed by Anthropic and released under the MIT License. Substantial modifications and new functionality have been added by For Good AI Inc. (dba Zencoder Inc.), and are licensed under the Apache License, Version 2.0.
+This project includes [code](https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack) originally developed by Anthropic and released under the MIT License. Substantial modifications and new functionality have been added by For Good AI Inc. (dba Zencoder Inc.), and are licensed under the Apache License, Version 2.0. Additional modifications in this fork are by Sigma.
 
 ## Overview
-A Model Context Protocol (MCP) server for interacting with Slack workspaces. This server provides tools to list channels, post messages, reply to threads, add reactions, get channel history, and manage users.
+A read-oriented Model Context Protocol (MCP) server for interacting with the Sigma Slack workspace. This server provides tools to list channels, read messages, search content, manage reactions, download files, view pins and bookmarks, and browse user profiles.
 
 ## Available Tools
+
+### Channels & Messages
 
 1. **slack_list_channels**
    - List public or pre-defined channels in the workspace
@@ -14,30 +23,13 @@ A Model Context Protocol (MCP) server for interacting with Slack workspaces. Thi
      - `cursor` (string): Pagination cursor for next page
    - Returns: List of channels with their IDs and information
 
-2. **slack_post_message**
-   - Post a new message to a Slack channel
+2. **slack_join_channel**
+   - Join a public Slack channel (the bot must join before it can read history or files)
    - Required inputs:
-     - `channel_id` (string): The ID of the channel to post to
-     - `text` (string): The message text to post
-   - Returns: Message posting confirmation and timestamp
+     - `channel_id` (string): The ID of the public channel to join
+   - Returns: Channel join confirmation
 
-3. **slack_reply_to_thread**
-   - Reply to a specific message thread
-   - Required inputs:
-     - `channel_id` (string): The channel containing the thread
-     - `thread_ts` (string): Timestamp of the parent message
-     - `text` (string): The reply text
-   - Returns: Reply confirmation and timestamp
-
-4. **slack_add_reaction**
-   - Add an emoji reaction to a message
-   - Required inputs:
-     - `channel_id` (string): The channel containing the message
-     - `timestamp` (string): Message timestamp to react to
-     - `reaction` (string): Emoji name without colons
-   - Returns: Reaction confirmation
-
-5. **slack_get_channel_history**
+3. **slack_get_channel_history**
    - Get recent messages from a channel
    - Required inputs:
      - `channel_id` (string): The channel ID
@@ -45,25 +37,108 @@ A Model Context Protocol (MCP) server for interacting with Slack workspaces. Thi
      - `limit` (number, default: 10): Number of messages to retrieve
    - Returns: List of messages with their content and metadata
 
-6. **slack_get_thread_replies**
+4. **slack_get_thread_replies**
    - Get all replies in a message thread
    - Required inputs:
      - `channel_id` (string): The channel containing the thread
      - `thread_ts` (string): Timestamp of the parent message
    - Returns: List of replies with their content and metadata
 
-7. **slack_get_users**
+### Reactions
+
+5. **slack_add_reaction**
+   - Add an emoji reaction to a message
+   - Required inputs:
+     - `channel_id` (string): The channel containing the message
+     - `timestamp` (string): Message timestamp to react to
+     - `reaction` (string): Emoji name without colons
+   - Returns: Reaction confirmation
+
+6. **slack_remove_reaction**
+   - Remove an emoji reaction from a message
+   - Required inputs:
+     - `channel_id` (string): The channel containing the message
+     - `timestamp` (string): Message timestamp
+     - `reaction` (string): Emoji name to remove (without colons)
+   - Returns: Removal confirmation
+
+7. **slack_get_reactions**
+   - Get all emoji reactions on a specific message
+   - Required inputs:
+     - `channel_id` (string): The channel containing the message
+     - `timestamp` (string): Message timestamp
+   - Returns: List of reactions with emoji names and reacting users
+
+### Users
+
+8. **slack_get_users**
    - Get list of workspace users with basic profile information
    - Optional inputs:
      - `cursor` (string): Pagination cursor for next page
      - `limit` (number, default: 100, max: 200): Maximum users to return
    - Returns: List of users with their basic profiles
 
-8. **slack_get_user_profile**
+9. **slack_get_user_profile**
    - Get detailed profile information for a specific user
    - Required inputs:
      - `user_id` (string): The user's ID
    - Returns: Detailed user profile information
+
+### Files
+
+10. **slack_download_file**
+    - Download a file shared in Slack by its file ID
+    - Required inputs:
+      - `file_id` (string): The Slack file ID (e.g., `F0123456789`) found in the `files` array of messages from `slack_get_channel_history`
+    - Behavior:
+      - For text-based files (code, markdown, plain text, CSV, JSON, etc.): returns the file content as a string
+      - For binary files (images, PDFs, etc.): saves the file to a local temp directory and returns the file path
+    - Enforces a 10MB file size limit
+    - Returns: File name, mimetype, size, and either content (text) or local file path (binary)
+
+11. **slack_list_files**
+    - List recent files shared in Slack, optionally filtered by channel or user
+    - Optional inputs:
+      - `channel_id` (string): Filter files by channel ID
+      - `user_id` (string): Filter files by user ID
+      - `count` (number, default: 20, max: 100): Number of files to return
+    - Returns: List of file metadata including id, name, filetype, mimetype, size, timestamp, user, channels, and download URL
+
+### Search
+
+12. **slack_search_messages**
+    - Search for messages across public channels in the workspace
+    - Required inputs:
+      - `query` (string): Search query (supports Slack modifiers like `in:#channel`, `from:@user`, `before:2024-01-01`, `has:link`, `has:reaction`, etc.)
+    - Optional inputs:
+      - `count` (number, default: 20, max: 100): Number of results to return
+      - `sort` (string, default: "timestamp"): Sort by `timestamp` or `score`
+      - `sort_dir` (string, default: "desc"): Sort direction `asc` or `desc`
+    - Returns: Matching messages with context
+
+13. **slack_search_files**
+    - Search for files shared across the workspace
+    - Required inputs:
+      - `query` (string): Search query (supports Slack modifiers like `in:#channel`, `from:@user`, `type:pdf`, etc.)
+    - Optional inputs:
+      - `count` (number, default: 20, max: 100): Number of results to return
+      - `sort` (string, default: "timestamp"): Sort by `timestamp` or `score`
+      - `sort_dir` (string, default: "desc"): Sort direction `asc` or `desc`
+    - Returns: Matching files with metadata
+
+### Pins & Bookmarks
+
+14. **slack_list_pins**
+    - List all pinned items in a channel
+    - Required inputs:
+      - `channel_id` (string): The channel ID
+    - Returns: List of pinned messages and files
+
+15. **slack_list_bookmarks**
+    - List all bookmarks (saved links) in a channel
+    - Required inputs:
+      - `channel_id` (string): The channel ID
+    - Returns: List of bookmarks with titles, URLs, and metadata
 
 ## Slack Bot Setup
 
@@ -77,10 +152,16 @@ To use this MCP server, you need to create a Slack app and configure it with the
 
 ### 2. Configure Bot Token Scopes
 Navigate to "OAuth & Permissions" and add these scopes:
+- `bookmarks:read` - View bookmarks in channels
 - `channels:history` - View messages and other content in public channels
+- `channels:join` - Join public channels in the workspace
 - `channels:read` - View basic channel information
-- `chat:write` - Send messages as the app
-- `reactions:write` - Add emoji reactions to messages
+- `files:read` - Access file content and metadata shared in channels
+- `pins:read` - View pinned items in channels
+- `reactions:read` - View emoji reactions on messages
+- `reactions:write` - Add and remove emoji reactions
+- `search:read.files` - Search files across the workspace
+- `search:read.public` - Search messages in public channels
 - `users:read` - View users and their basic information
 - `users.profile:read` - View detailed profiles about users
 
@@ -98,15 +179,14 @@ For the bot to access private channels or to post messages, you may need to invi
 
 - **Multiple Transport Support**: Supports both stdio and Streamable HTTP transports
 - **Modern MCP SDK**: Updated to use the latest MCP SDK (v1.13.2) with modern APIs
-- **Comprehensive Slack Integration**: Full set of Slack operations including:
-  - List channels (with predefined channel support)
-  - Post messages
-  - Reply to threads
-  - Add reactions
-  - Get channel history
-  - Get thread replies
-  - List users
-  - Get user profiles
+- **Comprehensive Slack Integration**: Full set of read-oriented Slack operations including:
+  - List and join channels
+  - Get channel history and thread replies
+  - Add, remove, and view reactions
+  - List and search users with profiles
+  - Download and search files
+  - Search messages across public channels
+  - View pinned items and bookmarks
 
 ## Installation
 

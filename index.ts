@@ -6,7 +6,9 @@ import { z } from "zod";
 import express from "express";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { writeFile, mkdir } from 'node:fs/promises';
 
 // Type definitions for tool arguments
 interface ListChannelsArgs {
@@ -218,6 +220,157 @@ export class SlackClient {
 
     return response.json();
   }
+
+  async getFileInfo(file_id: string): Promise<any> {
+    const params = new URLSearchParams({ file: file_id });
+
+    const response = await fetch(
+      `https://slack.com/api/files.info?${params}`,
+      { headers: this.botHeaders },
+    );
+
+    return response.json();
+  }
+
+  async downloadFileContent(url: string): Promise<Response> {
+    return fetch(url, {
+      headers: { Authorization: this.botHeaders.Authorization },
+    });
+  }
+
+  async listFiles(
+    channel_id?: string,
+    user_id?: string,
+    count: number = 20,
+  ): Promise<any> {
+    const params = new URLSearchParams({
+      count: Math.min(count, 100).toString(),
+    });
+
+    if (channel_id) {
+      params.append("channel", channel_id);
+    }
+    if (user_id) {
+      params.append("user", user_id);
+    }
+
+    const response = await fetch(
+      `https://slack.com/api/files.list?${params}`,
+      { headers: this.botHeaders },
+    );
+
+    return response.json();
+  }
+
+  async joinChannel(channel_id: string): Promise<any> {
+    const response = await fetch("https://slack.com/api/conversations.join", {
+      method: "POST",
+      headers: this.botHeaders,
+      body: JSON.stringify({ channel: channel_id }),
+    });
+
+    return response.json();
+  }
+
+  async getReactions(
+    channel_id: string,
+    timestamp: string,
+  ): Promise<any> {
+    const params = new URLSearchParams({
+      channel: channel_id,
+      timestamp: timestamp,
+      full: "true",
+    });
+
+    const response = await fetch(
+      `https://slack.com/api/reactions.get?${params}`,
+      { headers: this.botHeaders },
+    );
+
+    return response.json();
+  }
+
+  async removeReaction(
+    channel_id: string,
+    timestamp: string,
+    reaction: string,
+  ): Promise<any> {
+    const response = await fetch("https://slack.com/api/reactions.remove", {
+      method: "POST",
+      headers: this.botHeaders,
+      body: JSON.stringify({
+        channel: channel_id,
+        timestamp: timestamp,
+        name: reaction,
+      }),
+    });
+
+    return response.json();
+  }
+
+  async listPins(channel_id: string): Promise<any> {
+    const params = new URLSearchParams({ channel: channel_id });
+
+    const response = await fetch(
+      `https://slack.com/api/pins.list?${params}`,
+      { headers: this.botHeaders },
+    );
+
+    return response.json();
+  }
+
+  async listBookmarks(channel_id: string): Promise<any> {
+    const params = new URLSearchParams({ channel_id });
+
+    const response = await fetch(
+      `https://slack.com/api/bookmarks.list?${params}`,
+      { headers: this.botHeaders },
+    );
+
+    return response.json();
+  }
+
+  async searchMessages(
+    query: string,
+    count: number = 20,
+    sort: string = "timestamp",
+    sort_dir: string = "desc",
+  ): Promise<any> {
+    const params = new URLSearchParams({
+      query,
+      count: Math.min(count, 100).toString(),
+      sort,
+      sort_dir,
+    });
+
+    const response = await fetch(
+      `https://slack.com/api/search.messages?${params}`,
+      { headers: this.botHeaders },
+    );
+
+    return response.json();
+  }
+
+  async searchFiles(
+    query: string,
+    count: number = 20,
+    sort: string = "timestamp",
+    sort_dir: string = "desc",
+  ): Promise<any> {
+    const params = new URLSearchParams({
+      query,
+      count: Math.min(count, 100).toString(),
+      sort,
+      sort_dir,
+    });
+
+    const response = await fetch(
+      `https://slack.com/api/search.files?${params}`,
+      { headers: this.botHeaders },
+    );
+
+    return response.json();
+  }
 }
 
 export function createSlackServer(slackClient: SlackClient): McpServer {
@@ -366,6 +519,261 @@ export function createSlackServer(slackClient: SlackClient): McpServer {
     },
     async ({ user_id }) => {
       const response = await slackClient.getUserProfile(user_id);
+      return {
+        content: [{ type: "text", text: JSON.stringify(response) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_download_file",
+    {
+      title: "Download Slack File",
+      description: "Download a file shared in Slack by its file ID. For text-based files (code, markdown, plain text, CSV, JSON, etc.), returns the file content as a string. For binary files (images, PDFs, etc.), saves to a temp directory and returns the local file path. File IDs can be found in the 'files' array of messages returned by slack_get_channel_history.",
+      inputSchema: {
+        file_id: z.string().describe("The Slack file ID (e.g., F0123456789) found in message attachments"),
+      },
+    },
+    async ({ file_id }) => {
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+      const infoResponse = await slackClient.getFileInfo(file_id);
+      if (!infoResponse.ok) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: `Failed to get file info: ${infoResponse.error}` }) }],
+          isError: true,
+        };
+      }
+
+      const file = infoResponse.file;
+      const { name, mimetype, size, url_private_download } = file;
+
+      if (size > MAX_FILE_SIZE) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: `File too large: ${size} bytes (limit is ${MAX_FILE_SIZE} bytes / 10MB)`, name, mimetype, size }) }],
+          isError: true,
+        };
+      }
+
+      if (!url_private_download) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: "File has no downloadable URL. It may be an external file or the bot may lack access.", name, mimetype, size }) }],
+          isError: true,
+        };
+      }
+
+      const TEXT_MIME_PREFIXES = ["text/"];
+      const TEXT_MIME_EXACT = [
+        "application/json",
+        "application/xml",
+        "application/javascript",
+        "application/x-yaml",
+        "application/x-sh",
+        "application/x-python",
+        "application/x-ruby",
+        "application/x-perl",
+        "application/x-httpd-php",
+        "application/sql",
+        "application/graphql",
+        "application/toml",
+        "application/x-typescript",
+        "application/xhtml+xml",
+        "application/ld+json",
+      ];
+      const isTextFile =
+        TEXT_MIME_PREFIXES.some((p) => mimetype?.startsWith(p)) ||
+        TEXT_MIME_EXACT.includes(mimetype) ||
+        /\.(txt|md|csv|json|xml|ya?ml|sh|bash|zsh|py|rb|pl|php|js|ts|jsx|tsx|css|scss|less|html|htm|svg|sql|graphql|toml|ini|cfg|conf|log|env|gitignore|dockerfile|makefile)$/i.test(name);
+
+      const downloadResponse = await slackClient.downloadFileContent(url_private_download);
+      if (!downloadResponse.ok) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: `Failed to download file: HTTP ${downloadResponse.status}` }) }],
+          isError: true,
+        };
+      }
+
+      if (isTextFile) {
+        const textContent = await downloadResponse.text();
+        return {
+          content: [{ type: "text", text: JSON.stringify({ name, mimetype, size, content: textContent }) }],
+        };
+      }
+
+      const arrayBuffer = await downloadResponse.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const tempDir = join(tmpdir(), "slack-mcp-files");
+      await mkdir(tempDir, { recursive: true });
+      const sanitizedName = name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const filePath = join(tempDir, `${file_id}_${sanitizedName}`);
+      await writeFile(filePath, buffer);
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ name, mimetype, size, filePath, message: "Binary file saved to local temp directory" }) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_list_files",
+    {
+      title: "List Slack Files",
+      description: "List recent files shared in Slack, optionally filtered by channel or user",
+      inputSchema: {
+        channel_id: z.string().optional().describe("Filter files by channel ID"),
+        user_id: z.string().optional().describe("Filter files by user ID who uploaded the file"),
+        count: z.number().optional().default(20).describe("Number of files to return (default 20, max 100)"),
+      },
+    },
+    async ({ channel_id, user_id, count }) => {
+      const response = await slackClient.listFiles(channel_id, user_id, count);
+      if (!response.ok) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: `Failed to list files: ${response.error}` }) }],
+          isError: true,
+        };
+      }
+
+      const files = (response.files || []).map((f: any) => ({
+        id: f.id,
+        name: f.name,
+        filetype: f.filetype,
+        mimetype: f.mimetype,
+        size: f.size,
+        timestamp: f.timestamp,
+        user: f.user,
+        channels: f.channels,
+        url_private_download: f.url_private_download,
+      }));
+
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ok: true, files }) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_join_channel",
+    {
+      title: "Join Slack Channel",
+      description: "Join a public Slack channel. The bot must join a channel before it can read history or files from it.",
+      inputSchema: {
+        channel_id: z.string().describe("The ID of the public channel to join"),
+      },
+    },
+    async ({ channel_id }) => {
+      const response = await slackClient.joinChannel(channel_id);
+      return {
+        content: [{ type: "text", text: JSON.stringify(response) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_get_reactions",
+    {
+      title: "Get Slack Reactions",
+      description: "Get all emoji reactions on a specific message",
+      inputSchema: {
+        channel_id: z.string().describe("The ID of the channel containing the message"),
+        timestamp: z.string().describe("The timestamp of the message"),
+      },
+    },
+    async ({ channel_id, timestamp }) => {
+      const response = await slackClient.getReactions(channel_id, timestamp);
+      return {
+        content: [{ type: "text", text: JSON.stringify(response) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_remove_reaction",
+    {
+      title: "Remove Slack Reaction",
+      description: "Remove an emoji reaction from a message",
+      inputSchema: {
+        channel_id: z.string().describe("The ID of the channel containing the message"),
+        timestamp: z.string().describe("The timestamp of the message"),
+        reaction: z.string().describe("The name of the emoji reaction to remove (without ::)"),
+      },
+    },
+    async ({ channel_id, timestamp, reaction }) => {
+      const response = await slackClient.removeReaction(channel_id, timestamp, reaction);
+      return {
+        content: [{ type: "text", text: JSON.stringify(response) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_list_pins",
+    {
+      title: "List Slack Pins",
+      description: "List all pinned items in a Slack channel",
+      inputSchema: {
+        channel_id: z.string().describe("The ID of the channel to list pins from"),
+      },
+    },
+    async ({ channel_id }) => {
+      const response = await slackClient.listPins(channel_id);
+      return {
+        content: [{ type: "text", text: JSON.stringify(response) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_list_bookmarks",
+    {
+      title: "List Slack Bookmarks",
+      description: "List all bookmarks (saved links) in a Slack channel",
+      inputSchema: {
+        channel_id: z.string().describe("The ID of the channel to list bookmarks from"),
+      },
+    },
+    async ({ channel_id }) => {
+      const response = await slackClient.listBookmarks(channel_id);
+      return {
+        content: [{ type: "text", text: JSON.stringify(response) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_search_messages",
+    {
+      title: "Search Slack Messages",
+      description: "Search for messages across public channels in the workspace",
+      inputSchema: {
+        query: z.string().describe("The search query string. Supports Slack search modifiers like 'in:#channel', 'from:@user', 'before:2024-01-01', 'after:2024-01-01', 'has:link', 'has:reaction', etc."),
+        count: z.number().optional().default(20).describe("Number of results to return (default 20, max 100)"),
+        sort: z.enum(["timestamp", "score"]).optional().default("timestamp").describe("Sort order: 'timestamp' for most recent or 'score' for most relevant (default: timestamp)"),
+        sort_dir: z.enum(["asc", "desc"]).optional().default("desc").describe("Sort direction: 'asc' or 'desc' (default: desc)"),
+      },
+    },
+    async ({ query, count, sort, sort_dir }) => {
+      const response = await slackClient.searchMessages(query, count, sort, sort_dir);
+      return {
+        content: [{ type: "text", text: JSON.stringify(response) }],
+      };
+    }
+  );
+
+  server.registerTool(
+    "slack_search_files",
+    {
+      title: "Search Slack Files",
+      description: "Search for files shared across the workspace",
+      inputSchema: {
+        query: z.string().describe("The search query string. Supports Slack search modifiers like 'in:#channel', 'from:@user', 'type:pdf', etc."),
+        count: z.number().optional().default(20).describe("Number of results to return (default 20, max 100)"),
+        sort: z.enum(["timestamp", "score"]).optional().default("timestamp").describe("Sort order: 'timestamp' for most recent or 'score' for most relevant (default: timestamp)"),
+        sort_dir: z.enum(["asc", "desc"]).optional().default("desc").describe("Sort direction: 'asc' or 'desc' (default: desc)"),
+      },
+    },
+    async ({ query, count, sort, sort_dir }) => {
+      const response = await slackClient.searchFiles(query, count, sort, sort_dir);
       return {
         content: [{ type: "text", text: JSON.stringify(response) }],
       };
